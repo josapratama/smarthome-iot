@@ -1,433 +1,454 @@
-# Smart Home IoT Devices
+# ESP32 IoT Devices - Firmware Collection
 
-[![PlatformIO](https://img.shields.io/badge/PlatformIO-FF7F00?style=flat&logo=platformio&logoColor=white)](https://platformio.org/)
-[![ESP32](https://img.shields.io/badge/ESP32-000000?style=flat&logo=espressif&logoColor=white)](https://www.espressif.com/)
-[![Arduino](https://img.shields.io/badge/Arduino-00979D?style=flat&logo=Arduino&logoColor=white)](https://www.arduino.cc/)
-[![MQTT](https://img.shields.io/badge/MQTT-660066?style=flat&logo=mqtt&logoColor=white)](https://mqtt.org/)
+Koleksi firmware untuk berbagai jenis ESP32 IoT devices dengan fungsi spesifik.
 
-Firmware collection for ESP32-C3 SuperMini based IoT devices with sensor integration, OTA updates, and MQTT communication.
+## Konsep: One Device, One Task
 
-## 🔌 Supported Hardware
+Setiap folder berisi firmware untuk satu jenis device dengan satu tugas spesifik:
 
-### **ESP32-C3 SuperMini**
+- **esp32-base** - Firmware minimal (OTA only, no sensor)
+- **esp32-flame** - Flame detection + OTA
+- **esp32-mq2** - Gas detection (MQ-2) + OTA
+- **esp32-ultrasonic** - Distance measurement + OTA
+- **esp32-current** - Current monitoring + OTA
+- **esp32-relay** - Relay control + OTA
+- dll
 
-- **MCU**: ESP32-C3 (RISC-V single-core, 160MHz)
-- **Memory**: 400KB SRAM, 4MB Flash
-- **Connectivity**: WiFi 802.11 b/g/n, Bluetooth 5.0 LE
-- **GPIO**: 13 digital I/O pins
-- **ADC**: 6 channels, 12-bit
-- **Size**: Ultra-compact form factor
+## Struktur Folder
 
-## 📦 Device Firmware Collection
+```
+smarthome-iot/
+├── esp32-base/              # Base firmware (OTA only)
+│   ├── src/
+│   │   └── main.cpp
+│   ├── platformio.ini
+│   ├── OTA_GUIDE.md
+│   └── README.md
+│
+├── esp32-flame/             # Flame sensor
+│   ├── src/
+│   │   └── main.cpp
+│   ├── platformio.ini
+│   └── README.md
+│
+├── esp32-mq2/               # Gas sensor (MQ-2)
+│   ├── src/
+│   │   └── main.cpp
+│   ├── platformio.ini
+│   └── README.md
+│
+├── esp32-ultrasonic/        # Ultrasonic sensor (HC-SR04)
+│   ├── src/
+│   │   └── main.cpp
+│   ├── platformio.ini
+│   └── README.md
+│
+├── esp32-current/           # Current sensor (ACS712)
+│   ├── src/
+│   │   └── main.cpp
+│   ├── platformio.ini
+│   └── README.md
+│
+├── esp32-relay/             # Relay control
+│   ├── src/
+│   │   └── main.cpp
+│   ├── platformio.ini
+│   └── README.md
+│
+├── DEVICE_REGISTRATION_GUIDE.md  # Panduan registrasi device
+└── README.md                      # This file
+```
 
-### 🔧 [Base Firmware](./esp32-base/)
+## Quick Start
 
-**Initial setup firmware for first-time cable upload**
+### 1. Pilih Firmware Sesuai Kebutuhan
 
-- WiFi configuration and connection
-- MQTT client setup
-- OTA update capability
-- Basic device registration
-- WiFi reset button functionality
-- Buzzer support for notifications
-
-### ⚡ [PZEM-004T Energy Monitor](./esp32-pzem004t/)
-
-**Power consumption monitoring device**
-
-- Real-time voltage, current, power measurement
-- Energy consumption tracking
-- Power factor calculation
-- Frequency monitoring
-- Data logging and transmission
-
-### 🔥 [MQ-2 Gas Sensor](./esp32-mq2/)
-
-**Gas leak detection and air quality monitoring**
-
-- LPG, propane, methane detection
-- Smoke and combustible gas monitoring
-- Analog and digital output reading
-- Threshold-based alarm system
-- Air quality index calculation
-
-### 🔥 [Flame Sensor](./esp32-flame/)
-
-**Fire detection and safety monitoring**
-
-- Infrared flame detection
-- Digital and analog flame sensing
-- Multi-level sensitivity adjustment
-- Emergency alert system
-- False alarm prevention
-
-### 📏 [Ultrasonic Distance Sensor](./esp32-ultrasonic/)
-
-**Distance measurement and proximity detection**
-
-- HC-SR04 ultrasonic sensor integration
-- Accurate distance measurement (2cm - 400cm)
-- Water level monitoring
-- Parking assistance
-- Motion detection applications
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **PlatformIO IDE** or **PlatformIO Core**
-- **ESP32-C3 SuperMini** development board
-- **USB-C cable** for initial programming
-- **Sensors** (PZEM-004T, MQ-2, Flame sensor, HC-SR04)
-
-### Initial Setup
-
-1. **Install PlatformIO:**
+Contoh: Anda ingin membuat flame detector
 
 ```bash
-# Using pip
-pip install platformio
-
-# Or install PlatformIO IDE extension in VS Code
+cd esp32-flame
 ```
 
-2. **Clone and setup:**
+### 2. Konfigurasi WiFi & MQTT
+
+Edit `src/main.cpp`:
+
+```cpp
+const char* WIFI_SSID = "YourWiFi";
+const char* WIFI_PASSWORD = "YourPassword";
+const char* MQTT_SERVER = "192.168.100.1";
+```
+
+### 3. Upload Firmware
 
 ```bash
-git clone <repository-url>
-cd smarthome-iot
+pio run -t upload
+pio device monitor
 ```
 
-3. **First-time upload (Cable):**
+### 4. Catat MAC Address
+
+Dari serial monitor:
+
+```
+MAC: AA:BB:CC:DD:EE:FF
+```
+
+### 5. Registrasi di Backend
+
+Lihat [DEVICE_REGISTRATION_GUIDE.md](./DEVICE_REGISTRATION_GUIDE.md)
+
+### 6. Kirim Credentials
+
+Via API atau MQTT, kirim Device ID & Key ke ESP32.
+
+### 7. Done!
+
+Device siap digunakan.
+
+## Firmware Features
+
+Semua firmware include:
+
+✅ **WiFi Connection** - Auto-reconnect  
+✅ **MQTT Client** - Pub/sub messaging  
+✅ **OTA Update** - Wireless firmware update  
+✅ **Device Registration** - Auto-registration flow  
+✅ **Heartbeat** - Keep-alive monitoring  
+✅ **Command Handler** - PING, RESTART, OTA_UPDATE, dll  
+✅ **Credentials Storage** - NVS persistent storage
+
+Plus fitur spesifik per device type.
+
+## Device Types
+
+### esp32-base
+
+- **Purpose:** Base firmware untuk testing OTA
+- **Sensors:** None
+- **Use Case:** Testing, development, OTA verification
+
+### esp32-flame
+
+- **Purpose:** Fire detection
+- **Sensors:** Flame sensor (digital)
+- **Telemetry:** `flame` (boolean)
+- **Use Case:** Fire alarm, safety monitoring
+
+### esp32-mq2
+
+- **Purpose:** Gas leak detection
+- **Sensors:** MQ-2 gas sensor (analog)
+- **Telemetry:** `gasPpm` (float)
+- **Use Case:** Gas leak alarm, kitchen safety
+
+### esp32-ultrasonic
+
+- **Purpose:** Distance measurement
+- **Sensors:** HC-SR04 ultrasonic (digital)
+- **Telemetry:** `distanceCm` (float), `binLevel` (%)
+- **Use Case:** Trash bin monitoring, parking sensor
+
+### esp32-current
+
+- **Purpose:** Current monitoring
+- **Sensors:** ACS712 current sensor (analog)
+- **Telemetry:** `current` (float), `powerW` (float)
+- **Use Case:** Power monitoring, energy management
+
+### esp32-relay
+
+- **Purpose:** Device control
+- **Actuators:** Relay module (digital)
+- **Commands:** `TURN_ON`, `TURN_OFF`, `TOGGLE`
+- **Use Case:** Light control, appliance control
+
+## Development Workflow
+
+### 1. Create New Device Type
 
 ```bash
-cd esp32-base
-pio run --target upload --target monitor
+# Copy base firmware
+cp -r esp32-base esp32-newtype
+
+cd esp32-newtype
 ```
 
-4. **Configure WiFi and MQTT:**
+### 2. Modify Firmware
 
-- Connect to ESP32 hotspot: `SmartHome-Setup`
-- Open browser: `http://192.168.4.1`
-- Enter WiFi credentials and MQTT settings
-- Device will restart and connect
+Edit `src/main.cpp`:
 
-5. **Subsequent uploads (OTA):**
+```cpp
+// Change device type
+const char* DEVICE_TYPE = "NEWTYPE";
+
+// Add sensor pins
+#define SENSOR_PIN 34
+
+// Add sensor reading function
+float readSensor() {
+    int raw = analogRead(SENSOR_PIN);
+    return (raw / 4095.0) * 100.0;
+}
+
+// Modify telemetry
+void sendTelemetry() {
+    // ... existing code ...
+
+    float value = readSensor();
+    data["sensorValue"] = value;
+
+    // ... rest of code ...
+}
+```
+
+### 3. Test Locally
 
 ```bash
-# Update firmware over-the-air
-pio run --target upload --upload-port <device-ip>
+pio run -t upload
+pio device monitor
 ```
 
-## 📡 Communication Protocol
+### 4. Register Device
 
-### **MQTT Topics Structure**
+Follow [DEVICE_REGISTRATION_GUIDE.md](./DEVICE_REGISTRATION_GUIDE.md)
+
+### 5. Deploy
+
+Upload firmware to backend and trigger OTA to production devices.
+
+## OTA Update Workflow
+
+### Development (ArduinoOTA)
+
+```bash
+# First upload via USB
+pio run -t upload
+
+# Get ESP32 IP from serial monitor
+# Edit platformio.ini with IP
+
+# Upload via WiFi
+pio run -t upload
+```
+
+### Production (HTTP OTA)
+
+```bash
+# Build firmware
+pio run
+
+# Upload to backend
+curl -X POST http://backend/api/v1/firmware/releases \
+  -F "file=@.pio/build/esp32-c3-devkitm-1/firmware.bin" \
+  -F "platform=esp32-c3" \
+  -F "version=1.0.4"
+
+# Trigger OTA
+curl -X POST http://backend/api/v1/ota/devices/5/trigger \
+  -d '{"releaseId": 1}'
+```
+
+## Hardware Requirements
+
+### Minimum (All Devices)
+
+- ESP32-C3 DevKitM-1 (or compatible)
+- USB-C cable
+- 5V power supply
+
+### Per Device Type
+
+**esp32-flame:**
+
+- Flame sensor module (digital output)
+- Jumper wires
+
+**esp32-mq2:**
+
+- MQ-2 gas sensor module
+- Jumper wires
+
+**esp32-ultrasonic:**
+
+- HC-SR04 ultrasonic sensor
+- Jumper wires
+
+**esp32-current:**
+
+- ACS712 current sensor (5A/20A/30A)
+- Jumper wires
+
+**esp32-relay:**
+
+- Relay module (1/2/4/8 channel)
+- Jumper wires
+- External power for relay (if needed)
+
+## Pin Configuration
+
+Default pins (dapat diubah di firmware):
+
+```cpp
+// Analog sensors
+#define SENSOR_PIN 34  // ADC1_CH6
+
+// Digital sensors
+#define SENSOR_PIN 32  // GPIO32
+
+// Ultrasonic
+#define TRIG_PIN 25
+#define ECHO_PIN 26
+
+// Relay
+#define RELAY_PIN 33
+
+// Built-in LED
+#define LED_BUILTIN 8  // ESP32-C3
+```
+
+## MQTT Topics
+
+### Device → Backend
 
 ```
-smarthome/{homeId}/{deviceId}/telemetry    # Sensor data
-smarthome/{homeId}/{deviceId}/commands     # Control commands
-smarthome/{homeId}/{deviceId}/status       # Device status
-smarthome/{homeId}/{deviceId}/config       # Configuration
-smarthome/{homeId}/{deviceId}/ota          # OTA updates
+devices/{deviceId}/telemetry      # Sensor data
+devices/{deviceId}/heartbeat      # Keep-alive
+devices/{deviceId}/commands/ack   # Command acknowledgment
+devices/{deviceId}/ota/progress   # OTA progress
+devices/register/request          # Registration request
 ```
 
-### **Telemetry Data Format**
+### Backend → Device
+
+```
+devices/{deviceId}/commands       # Commands (PING, RESTART, OTA, etc)
+devices/register/{MAC}            # Registration response (SET_CREDENTIALS)
+```
+
+## Telemetry Schema
+
+Setiap device kirim telemetry dengan format:
 
 ```json
 {
-  "timestamp": "2026-02-13T12:00:00.000Z",
-  "deviceId": "ESP32_C3_001",
-  "deviceType": "energy_monitor",
+  "deviceKey": "sk_abc123",
+  "ts": 1234567890,
   "data": {
-    "voltage": 220.5,
-    "current": 0.75,
-    "power": 165.4,
-    "energy": 1.25,
-    "frequency": 50.0,
-    "powerFactor": 0.95
-  },
-  "status": {
-    "rssi": -45,
-    "uptime": 3600,
-    "freeHeap": 280000,
-    "temperature": 35.2
+    // Device-specific sensor data
+    "flame": false,
+    "gasPpm": 150.5,
+    "distanceCm": 45.2,
+    "current": 2.5
+    // etc
   }
 }
 ```
 
-### **Command Format**
+## Commands
+
+Semua device support commands:
+
+### PING
 
 ```json
 {
-  "commandId": "cmd_123456789",
-  "timestamp": "2026-02-13T12:00:00.000Z",
-  "type": "SET_CONFIG",
+  "commandId": 123,
+  "type": "PING",
+  "payload": {}
+}
+```
+
+### RESTART
+
+```json
+{
+  "commandId": 124,
+  "type": "RESTART",
+  "payload": {}
+}
+```
+
+### OTA_UPDATE
+
+```json
+{
+  "commandId": 125,
+  "type": "OTA_UPDATE",
   "payload": {
-    "reportInterval": 30,
-    "threshold": 100.0,
-    "buzzerEnabled": true
+    "firmwareUrl": "http://backend/firmware.bin",
+    "version": "1.0.4",
+    "otaJobId": 456
   }
 }
 ```
 
-## 🔧 Hardware Connections
+### SET_CREDENTIALS (Registration only)
 
-### **ESP32-C3 SuperMini Pinout**
-
-```
-                    ESP32-C3 SuperMini
-                    ┌─────────────────┐
-                    │  [ ]         [ ]│
-                    │  [ ]         [ ]│
-               3V3  │  [ ]         [ ]│  GND
-               EN   │  [ ]         [ ]│  3V3
-              GPIO4 │  [ ]         [ ]│  GPIO10
-              GPIO5 │  [ ]         [ ]│  GPIO9
-              GPIO6 │  [ ]         [ ]│  GPIO8
-              GPIO7 │  [ ]         [ ]│  GPIO7
-                    │  [ ]         [ ]│
-                    │     USB-C       │
-                    └─────────────────┘
-```
-
-### **Sensor Connections**
-
-**PZEM-004T Energy Monitor:**
-
-```
-ESP32-C3    PZEM-004T
-GPIO4   →   TX
-GPIO5   →   RX
-3V3     →   VCC
-GND     →   GND
-```
-
-**MQ-2 Gas Sensor:**
-
-```
-ESP32-C3    MQ-2
-GPIO6   →   A0 (Analog)
-GPIO7   →   D0 (Digital)
-3V3     →   VCC
-GND     →   GND
-```
-
-**Flame Sensor:**
-
-```
-ESP32-C3    Flame Sensor
-GPIO8   →   A0 (Analog)
-GPIO9   →   D0 (Digital)
-3V3     →   VCC
-GND     →   GND
-```
-
-**HC-SR04 Ultrasonic:**
-
-```
-ESP32-C3    HC-SR04
-GPIO10  →   Trig
-GPIO9   →   Echo
-5V      →   VCC (use level shifter)
-GND     →   GND
-```
-
-**Common Components:**
-
-```
-ESP32-C3    Component
-GPIO2   →   WiFi Reset Button (Pull-up)
-GPIO3   →   Buzzer (+)
-GND     →   Buzzer (-)
-```
-
-## ⚙️ Configuration
-
-### **platformio.ini Example**
-
-```ini
-[env:esp32-c3-devkitm-1]
-platform = espressif32
-board = esp32-c3-devkitm-1
-framework = arduino
-monitor_speed = 115200
-upload_speed = 921600
-
-lib_deps =
-    knolleary/PubSubClient@^2.8
-    bblanchon/ArduinoJson@^6.21.3
-    tzapu/WiFiManager@^2.0.16-rc.2
-    ayushsharma82/AsyncElegantOTA@^2.2.7
-
-build_flags =
-    -DCORE_DEBUG_LEVEL=3
-    -DBOARD_HAS_PSRAM
-```
-
-### **WiFi Configuration**
-
-- **Setup Mode**: Device creates hotspot `SmartHome-Setup`
-- **Configuration Portal**: `http://192.168.4.1`
-- **Reset**: Hold WiFi reset button for 5 seconds
-- **Fallback**: Auto-reconnect with saved credentials
-
-### **MQTT Configuration**
-
-```cpp
-// MQTT Settings (configurable via web portal)
-const char* mqtt_server = "your-mqtt-broker.com";
-const int mqtt_port = 1883;
-const char* mqtt_user = "your-username";
-const char* mqtt_password = "your-password";
-```
-
-## 🔄 OTA Updates
-
-### **Enable OTA in Code**
-
-```cpp
-#include <AsyncElegantOTA.h>
-
-void setup() {
-    // ... WiFi setup
-
-    AsyncElegantOTA.begin(&server);
-    server.begin();
+```json
+{
+  "commandId": 126,
+  "type": "SET_CREDENTIALS",
+  "payload": {
+    "deviceId": 5,
+    "deviceKey": "sk_abc123"
+  }
 }
 ```
 
-### **Upload via OTA**
+## Troubleshooting
 
-```bash
-# Method 1: PlatformIO
-pio run --target upload --upload-port 192.168.1.100
+### Device tidak connect WiFi
 
-# Method 2: Web Interface
-# Open http://device-ip/update
-# Upload .bin file through web interface
+- Check SSID dan password
+- Check WiFi 2.4GHz (ESP32 tidak support 5GHz)
+- Check signal strength
 
-# Method 3: Backend API
-curl -X POST http://device-ip/update \
-  -F "firmware=@.pio/build/esp32-c3-devkitm-1/firmware.bin"
-```
+### MQTT tidak connect
 
-## 🚨 Safety Features
+- Check MQTT broker running
+- Check MQTT_SERVER IP benar
+- Check firewall tidak block port 1883
 
-### **WiFi Reset Button**
+### Device tidak kirim telemetry
 
-- **Function**: Reset WiFi credentials and restart setup mode
-- **Usage**: Hold button for 5+ seconds
-- **Indicator**: Buzzer beeps 3 times, LED blinks rapidly
-- **Recovery**: Device creates setup hotspot
+- Check device registered (Device ID > 0)
+- Check MQTT connected
+- Check sensor wiring
 
-### **Buzzer Notifications**
+### OTA gagal
 
-- **Startup**: 1 short beep
-- **WiFi Connected**: 2 short beeps
-- **MQTT Connected**: 3 short beeps
-- **Error**: Long continuous beep
-- **Reset**: 3 rapid beeps
+- Check firmware size < available flash
+- Check WiFi stable
+- Check backend URL accessible
 
-### **Watchdog Timer**
+## Best Practices
 
-- **Function**: Auto-restart if device hangs
-- **Timeout**: 30 seconds
-- **Reset**: Hardware and software reset capability
+1. **One Task Per Device** - Jangan gabungkan banyak sensor dalam satu device
+2. **Descriptive Names** - Beri nama device yang jelas (e.g., "Kitchen Gas Sensor")
+3. **Version Control** - Increment version number setiap update
+4. **Test First** - Test di 1 device sebelum mass deployment
+5. **Monitor Logs** - Selalu monitor serial output saat development
+6. **Backup Firmware** - Simpan firmware lama sebelum update
+7. **Document Changes** - Catat perubahan di README setiap folder
 
-### **Error Handling**
+## Contributing
 
-- **WiFi Disconnection**: Auto-reconnect with exponential backoff
-- **MQTT Disconnection**: Automatic reconnection attempts
-- **Sensor Errors**: Error reporting and fallback values
-- **Memory Management**: Heap monitoring and cleanup
+Untuk menambah device type baru:
 
-## 📊 Monitoring & Debugging
+1. Copy `esp32-base` sebagai template
+2. Modify firmware sesuai kebutuhan
+3. Test thoroughly
+4. Update README dengan specs
+5. Commit dengan descriptive message
 
-### **Serial Monitor**
+## Support
 
-```bash
-pio device monitor --baud 115200
-```
+- **Documentation:** Lihat README.md di setiap folder
+- **Registration:** [DEVICE_REGISTRATION_GUIDE.md](./DEVICE_REGISTRATION_GUIDE.md)
+- **OTA Guide:** [esp32-base/OTA_GUIDE.md](./esp32-base/OTA_GUIDE.md)
+- **Issues:** Report via GitHub issues
 
-### **Debug Output Example**
+## License
 
-```
-[INFO] ESP32-C3 Smart Home Device Starting...
-[INFO] MAC Address: 34:85:18:12:34:56
-[INFO] Connecting to WiFi: MyHomeWiFi
-[INFO] WiFi Connected! IP: 192.168.1.100
-[INFO] MQTT Connecting to: mqtt.smarthome.local:1883
-[INFO] MQTT Connected! Client ID: ESP32_C3_001
-[INFO] OTA Server Started: http://192.168.1.100/update
-[INFO] Device Ready - Type: energy_monitor
-[DATA] Voltage: 220.5V, Current: 0.75A, Power: 165.4W
-```
-
-### **Web Dashboard**
-
-Access device status at: `http://device-ip/`
-
-- Real-time sensor readings
-- System information
-- Configuration options
-- OTA update interface
-
-## 🔧 Development Guidelines
-
-### **Code Structure**
-
-```
-esp32-device/
-├── src/
-│   ├── main.cpp              # Main application
-│   ├── config.h              # Configuration constants
-│   ├── wifi_manager.cpp      # WiFi management
-│   ├── mqtt_client.cpp       # MQTT communication
-│   ├── sensor_handler.cpp    # Sensor-specific code
-│   └── ota_updater.cpp       # OTA functionality
-├── include/
-│   └── *.h                   # Header files
-├── lib/
-│   └── custom_libs/          # Custom libraries
-└── platformio.ini            # PlatformIO configuration
-```
-
-### **Coding Standards**
-
-- Use meaningful variable names
-- Comment complex logic
-- Handle errors gracefully
-- Implement proper logging
-- Follow Arduino/ESP32 conventions
-
-### **Testing**
-
-- Test WiFi connection scenarios
-- Verify MQTT communication
-- Validate sensor readings
-- Test OTA update process
-- Check error recovery
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Test on actual hardware
-4. Submit a pull request
-
-## 📞 Support
-
-- **Documentation**: [Smart Home Backend](../smarthome-backend/docs/)
-- **Hardware Issues**: Check connections and power supply
-- **Software Issues**: Enable debug logging and check serial output
-- **MQTT Issues**: Verify broker settings and network connectivity
-
----
-
-**Ready to build your IoT smart home network?**
-
-Start with the [Base Firmware](./esp32-base/) for initial setup, then choose the appropriate sensor firmware for your specific use case.
+MIT License - See LICENSE file for details

@@ -1,503 +1,534 @@
 #include <WiFi.h>
-#include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <AsyncElegantOTA.h>
 #include <Preferences.h>
-#include <esp_system.h>
+#include <ArduinoOTA.h>
+#include <HTTPClient.h>
+#include <Update.h>
 
-// Pin definitions
-#define WIFI_RESET_PIN 2
-#define BUZZER_PIN 3
-#define LED_BUILTIN 8
+#ifndef LED_BUILTIN
+  #define LED_BUILTIN 8
+#endif
 
-// Device configuration
-const char* DEVICE_TYPE = "base_device";
-const char* FIRMWARE_VERSION = "1.0.0";
-String DEVICE_ID = "ESP32_C3_" + String((uint32_t)ESP.getEfuseMac(), HEX);
+// ===== KONFIGURASI - GANTI SESUAI KEBUTUHAN =====
+// PENTING: Pastikan WiFi menggunakan 2.4GHz (ESP32 tidak support 5GHz)
+// Jika error AUTH_EXPIRE, cek:
+// 1. Password WiFi benar
+// 2. Router tidak pakai MAC filtering
+// 3. Signal WiFi cukup kuat
+const char* WIFI_SSID = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
-// WiFi and MQTT
+const char* MQTT_SERVER = "192.168.100.11";  // IP komputer (bukan router!)
+const int MQTT_PORT = 1883;
+const char* MQTT_USER = "";  // Kosongkan jika tidak pakai auth
+const char* MQTT_PASSWORD = "";
+
+// DEVICE_ID dan DEVICE_KEY akan didapat setelah registrasi di backend
+const int DEVICE_ID = 0;  // Set ke 0 untuk mode registrasi
+const char* DEVICE_KEY = "";  // Kosongkan untuk mode registrasi
+// ================================================
+
+const char* FIRMWARE_VERSION = "1.0.4";  // Updated version
+const char* DEVICE_TYPE = "BASE";  // Type: BASE (no sensor, OTA only)
+
+// Backend URL untuk OTA
+String BACKEND_OTA_URL = "http://192.168.100.11:3000";
+
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
-AsyncWebServer server(80);
 Preferences preferences;
 
-// Configuration variables
-String mqtt_server = "localhost";
-String mqtt_port = "1883";
-String mqtt_user = "";
-String mqtt_password = "";
-String home_id = "default_home";
-
-// Timing variables
-unsigned long lastMqttReconnect = 0;
 unsigned long lastHeartbeat = 0;
-unsigned long lastTelemetry = 0;
-const unsigned long MQTT_RECONNECT_INTERVAL = 5000;
-const unsigned long HEARTBEAT_INTERVAL = 30000;
-const unsigned long TELEMETRY_INTERVAL = 60000;
+const unsigned long HEARTBEAT_INTERVAL = 30000; // 30 detik
 
-// Status variables
-bool wifiConnected = false;
-bool mqttConnected = false;
-unsigned long bootTime = 0;
+// MAC Address untuk identifikasi unik
+String macAddress;
+
+// Forward declarations
+void connectWiFi();
+void connectMQTT();
+void sendHeartbeat();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+void sendCommandAck(int commandId, const char* status, const char* message);
+void setupOTA();
+void performOTAUpdate(String firmwareUrl, String version, int otaJobId);
+void sendOTAProgress(int otaJobId, const char* status, int progress, String error);
 
 void setup() {
     Serial.begin(115200);
-    Serial.println("\n=== ESP32-C3 Smart Home Base Device ===");
-    Serial.println("Firmware Version: " + String(FIRMWARE_VERSION));
-    Serial.println("Device ID: " + DEVICE_ID);
+    delay(1000);
     
-    bootTime = millis();
+    // Get MAC Address
+    macAddress = WiFi.macAddress();
     
-    // Initialize pins
-    pinMode(WIFI_RESET_PIN, INPUT_PULLUP);
-    pinMode(BUZZER_PIN, OUTPUT);
+    Serial.println("\n================================");
+    Serial.println("ESP32-C3 BASE (OTA Only)");
+    Serial.println("================================");
+    Serial.println("MAC: " + macAddress);
+    Serial.println("Type: " + String(DEVICE_TYPE));
+    Serial.println("Firmware: " + String(FIRMWARE_VERSION));
+    Serial.println("================================\n");
+    
+    // Init pins
     pinMode(LED_BUILTIN, OUTPUT);
     
-    // Initialize preferences
-    preferences.begin("smarthome", false);
+    // Init preferences
+    preferences.begin("device", false);
     
-    // Startup beep
-    buzzerBeep(1, 200);
+    // Load saved device credentials
+    if (preferences.isKey("deviceId")) {
+        int savedId = preferences.getInt("deviceId", 0);
+        String savedKey = preferences.getString("deviceKey", "");
+        if (savedId > 0 && savedKey.length() > 0) {
+            Serial.println("Loaded credentials from memory");
+            Serial.println("Device ID: " + String(savedId));
+            // Update constants (will be used in MQTT)
+            // Note: Can't modify const, so we'll use preferences directly
+        }
+    }
     
-    // Initialize WiFi
-    setupWiFi();
-    
-    // Load MQTT configuration
-    loadMqttConfig();
+    // Connect WiFi
+    connectWiFi();
     
     // Setup MQTT
-    mqttClient.setServer(mqtt_server.c_str(), mqtt_port.toInt());
+    mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
     mqttClient.setCallback(mqttCallback);
+    mqttClient.setKeepAlive(60);
+    mqttClient.setSocketTimeout(15);
     
-    // Setup web server
-    setupWebServer();
+    // Connect MQTT
+    connectMQTT();
     
     // Setup OTA
-    AsyncElegantOTA.begin(&server);
-    server.begin();
+    setupOTA();
     
-    Serial.println("Setup completed!");
-    Serial.println("Web interface: http://" + WiFi.localIP().toString());
-    Serial.println("OTA update: http://" + WiFi.localIP().toString() + "/update");
-    
-    // Connected beeps
-    buzzerBeep(3, 100);
+    Serial.println("\n=== DEVICE READY ===");
+    Serial.println("Untuk registrasi device:");
+    Serial.println("1. Buka backend admin panel");
+    Serial.println("2. Tambah device baru");
+    Serial.println("3. Gunakan MAC: " + macAddress);
+    Serial.println("4. Setelah dapat Device ID & Key,");
+    Serial.println("   kirim command SET_CREDENTIALS");
+    Serial.println("====================\n");
 }
 
 void loop() {
-    // Handle WiFi reset button
-    handleWiFiReset();
-    
-    // Maintain WiFi connection
+    // Check WiFi
     if (WiFi.status() != WL_CONNECTED) {
-        if (wifiConnected) {
-            Serial.println("WiFi disconnected!");
-            wifiConnected = false;
-            buzzerBeep(1, 1000); // Long beep for error
-        }
-        // Try to reconnect
-        if (millis() % 10000 == 0) {
-            WiFi.reconnect();
-        }
-    } else {
-        if (!wifiConnected) {
-            Serial.println("WiFi reconnected!");
-            wifiConnected = true;
-            buzzerBeep(2, 200);
-        }
+        Serial.println("WiFi lost!");
+        connectWiFi();
     }
     
-    // Maintain MQTT connection
-    if (wifiConnected) {
-        if (!mqttClient.connected()) {
-            if (mqttConnected) {
-                Serial.println("MQTT disconnected!");
-                mqttConnected = false;
-            }
-            if (millis() - lastMqttReconnect > MQTT_RECONNECT_INTERVAL) {
-                reconnectMqtt();
-                lastMqttReconnect = millis();
-            }
-        } else {
-            if (!mqttConnected) {
-                Serial.println("MQTT connected!");
-                mqttConnected = true;
-                buzzerBeep(3, 100);
-                publishStatus();
-            }
-        }
-        
-        mqttClient.loop();
-        
-        // Send heartbeat
-        if (millis() - lastHeartbeat > HEARTBEAT_INTERVAL) {
-            publishHeartbeat();
-            lastHeartbeat = millis();
-        }
-        
-        // Send telemetry
-        if (millis() - lastTelemetry > TELEMETRY_INTERVAL) {
-            publishTelemetry();
-            lastTelemetry = millis();
-        }
+    // Check MQTT
+    if (!mqttClient.connected()) {
+        connectMQTT();
     }
     
-    // Blink LED to show device is alive
-    digitalWrite(LED_BUILTIN, (millis() / 1000) % 2);
+    // MQTT loop
+    mqttClient.loop();
+    
+    // OTA handle
+    ArduinoOTA.handle();
+    
+    // Send heartbeat setiap interval
+    if (millis() - lastHeartbeat > HEARTBEAT_INTERVAL) {
+        sendHeartbeat();
+        lastHeartbeat = millis();
+    }
+    
+    // Blink LED (slow = waiting registration, fast = registered)
+    int deviceId = preferences.getInt("deviceId", 0);
+    int blinkInterval = (deviceId > 0) ? 1000 : 200;
+    digitalWrite(LED_BUILTIN, (millis() / blinkInterval) % 2);
     
     delay(100);
 }
 
-void setupWiFi() {
-    WiFiManager wm;
+void connectWiFi() {
+    Serial.println("\n=== Connecting to WiFi ===");
+    Serial.println("SSID: " + String(WIFI_SSID));
     
-    // Add custom parameters for MQTT configuration
-    WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", mqtt_server.c_str(), 40);
-    WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", mqtt_port.c_str(), 6);
-    WiFiManagerParameter custom_mqtt_user("user", "MQTT User", mqtt_user.c_str(), 32);
-    WiFiManagerParameter custom_mqtt_password("password", "MQTT Password", mqtt_password.c_str(), 32);
-    WiFiManagerParameter custom_home_id("home_id", "Home ID", home_id.c_str(), 32);
+    // Disconnect first to clear any previous state
+    WiFi.disconnect(true);
+    delay(1000);
     
-    wm.addParameter(&custom_mqtt_server);
-    wm.addParameter(&custom_mqtt_port);
-    wm.addParameter(&custom_mqtt_user);
-    wm.addParameter(&custom_mqtt_password);
-    wm.addParameter(&custom_home_id);
+    // Set WiFi mode
+    WiFi.mode(WIFI_STA);
     
-    // Set callback to save parameters
-    wm.setSaveParamsCallback(saveConfigCallback);
+    // Optional: Set hostname
+    WiFi.setHostname(("ESP32-" + macAddress).c_str());
     
-    // Try to connect with saved credentials
-    wm.setConfigPortalTimeout(300); // 5 minutes timeout
+    // Start connection
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     
-    if (!wm.autoConnect(("SmartHome-" + DEVICE_ID).c_str(), "smarthome123")) {
-        Serial.println("Failed to connect and hit timeout");
+    Serial.print("Connecting");
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+        delay(500);
+        Serial.print(".");
+        
+        // Print status for debugging
+        if (attempts % 10 == 0 && attempts > 0) {
+            Serial.print("\nStatus: ");
+            Serial.print(WiFi.status());
+            Serial.print(" ");
+        }
+        
+        attempts++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n✓ WiFi Connected!");
+        Serial.println("IP: " + WiFi.localIP().toString());
+        Serial.println("Signal: " + String(WiFi.RSSI()) + " dBm");
+    } else {
+        Serial.println("\n✗ WiFi Connection Failed!");
+        Serial.println("Status: " + String(WiFi.status()));
+        Serial.println("Possible issues:");
+        Serial.println("- Wrong password");
+        Serial.println("- Router too far (weak signal)");
+        Serial.println("- Router MAC filtering enabled");
+        Serial.println("- 2.4GHz band disabled on router");
+        Serial.println("\nWaiting 10 seconds before retry...");
+        delay(10000);
         ESP.restart();
     }
-    
-    Serial.println("WiFi connected!");
-    Serial.println("IP address: " + WiFi.localIP().toString());
-    Serial.println("MAC address: " + WiFi.macAddress());
-    
-    wifiConnected = true;
-    buzzerBeep(2, 200);
 }
 
-void saveConfigCallback() {
-    Serial.println("Saving MQTT configuration...");
+void connectMQTT() {
+    if (mqttClient.connected()) return;
     
-    // Save MQTT configuration to preferences
-    preferences.putString("mqtt_server", mqtt_server);
-    preferences.putString("mqtt_port", mqtt_port);
-    preferences.putString("mqtt_user", mqtt_user);
-    preferences.putString("mqtt_password", mqtt_password);
-    preferences.putString("home_id", home_id);
+    Serial.print("Connecting MQTT");
     
-    Serial.println("Configuration saved!");
-}
-
-void loadMqttConfig() {
-    mqtt_server = preferences.getString("mqtt_server", "localhost");
-    mqtt_port = preferences.getString("mqtt_port", "1883");
-    mqtt_user = preferences.getString("mqtt_user", "");
-    mqtt_password = preferences.getString("mqtt_password", "");
-    home_id = preferences.getString("home_id", "default_home");
+    // Use MAC address as client ID if not registered yet
+    int deviceId = preferences.getInt("deviceId", 0);
+    String clientId = (deviceId > 0) ? "ESP32_" + String(deviceId) : "ESP32_" + macAddress;
+    clientId.replace(":", "");
     
-    Serial.println("Loaded MQTT config:");
-    Serial.println("Server: " + mqtt_server + ":" + mqtt_port);
-    Serial.println("User: " + mqtt_user);
-    Serial.println("Home ID: " + home_id);
-}
-
-void reconnectMqtt() {
-    if (mqttClient.connect(DEVICE_ID.c_str(), mqtt_user.c_str(), mqtt_password.c_str())) {
-        Serial.println("MQTT connected!");
-        
-        // Subscribe to command topics
-        String commandTopic = "smarthome/" + home_id + "/" + DEVICE_ID + "/commands";
-        String configTopic = "smarthome/" + home_id + "/" + DEVICE_ID + "/config";
-        String otaTopic = "smarthome/" + home_id + "/" + DEVICE_ID + "/ota";
-        
-        mqttClient.subscribe(commandTopic.c_str());
-        mqttClient.subscribe(configTopic.c_str());
-        mqttClient.subscribe(otaTopic.c_str());
-        
-        Serial.println("Subscribed to: " + commandTopic);
-        Serial.println("Subscribed to: " + configTopic);
-        Serial.println("Subscribed to: " + otaTopic);
-        
-    } else {
-        Serial.print("MQTT connection failed, rc=");
-        Serial.println(mqttClient.state());
+    int attempts = 0;
+    while (!mqttClient.connected() && attempts < 3) {
+        if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD)) {
+            Serial.println("\n✓ MQTT OK");
+            
+            if (deviceId > 0) {
+                // Subscribe to device-specific commands
+                String commandTopic = "devices/" + String(deviceId) + "/commands";
+                mqttClient.subscribe(commandTopic.c_str(), 1);
+                Serial.println("Subscribed: " + commandTopic);
+            } else {
+                // Subscribe to registration topic
+                String regTopic = "devices/register/" + macAddress;
+                regTopic.replace(":", "");
+                mqttClient.subscribe(regTopic.c_str(), 1);
+                Serial.println("Subscribed: " + regTopic + " (waiting registration)");
+            }
+            
+        } else {
+            Serial.print(".");
+            attempts++;
+            delay(2000);
+        }
     }
+    
+    if (!mqttClient.connected()) {
+        Serial.println("\n✗ MQTT failed!");
+    }
+}
+
+void sendHeartbeat() {
+    if (!mqttClient.connected()) return;
+    
+    int deviceId = preferences.getInt("deviceId", 0);
+    String deviceKey = preferences.getString("deviceKey", "");
+    
+    if (deviceId == 0) {
+        // Not registered yet, send registration request
+        StaticJsonDocument<256> doc;
+        doc["mac"] = macAddress;
+        doc["type"] = DEVICE_TYPE;
+        doc["firmware"] = FIRMWARE_VERSION;
+        doc["ip"] = WiFi.localIP().toString();
+        
+        String payload;
+        serializeJson(doc, payload);
+        
+        String topic = "devices/register/request";
+        mqttClient.publish(topic.c_str(), payload.c_str());
+        Serial.println("Sent registration request");
+        return;
+    }
+    
+    // Send heartbeat
+    StaticJsonDocument<256> doc;
+    doc["deviceKey"] = deviceKey;
+    doc["firmware"] = FIRMWARE_VERSION;
+    doc["ip"] = WiFi.localIP().toString();
+    doc["uptime"] = millis() / 1000;
+    doc["freeHeap"] = ESP.getFreeHeap();
+    
+    // Add mqttClientId
+    String clientId = "ESP32_" + String(deviceId);
+    doc["mqttClientId"] = clientId;
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    String topic = "devices/" + String(deviceId) + "/heartbeat";
+    mqttClient.publish(topic.c_str(), payload.c_str());
+    Serial.println("Heartbeat sent (ID=" + String(deviceId) + ")");
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String message = "";
-    for (int i = 0; i < length; i++) {
+    for (unsigned int i = 0; i < length; i++) {
         message += (char)payload[i];
     }
     
-    Serial.println("MQTT message received:");
+    Serial.println("\nCommand received:");
     Serial.println("Topic: " + String(topic));
-    Serial.println("Message: " + message);
+    Serial.println("Payload: " + message);
     
-    // Parse JSON message
-    DynamicJsonDocument doc(1024);
-    deserializeJson(doc, message);
+    // Parse JSON
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, message);
     
-    String topicStr = String(topic);
-    
-    if (topicStr.endsWith("/commands")) {
-        handleCommand(doc);
-    } else if (topicStr.endsWith("/config")) {
-        handleConfig(doc);
-    } else if (topicStr.endsWith("/ota")) {
-        handleOTA(doc);
+    if (error) {
+        Serial.println("JSON parse error!");
+        return;
     }
-}
-
-void handleCommand(DynamicJsonDocument& doc) {
-    String commandType = doc["type"];
     
-    if (commandType == "PING") {
-        publishStatus();
-        buzzerBeep(1, 100);
-    } else if (commandType == "RESTART") {
-        Serial.println("Restart command received");
-        buzzerBeep(2, 500);
+    // Handle command
+    String type = doc["type"] | "";
+    int commandId = doc["commandId"] | 0;  // Changed from "id" to "commandId"
+    
+    if (type == "RESTART") {
+        Serial.println("Restarting...");
+        sendCommandAck(commandId, "SUCCESS", "Device restarting");
         delay(1000);
         ESP.restart();
-    } else if (commandType == "BUZZER_TEST") {
-        int beeps = doc["payload"]["beeps"] | 3;
-        int duration = doc["payload"]["duration"] | 200;
-        buzzerBeep(beeps, duration);
-    }
-}
-
-void handleConfig(DynamicJsonDocument& doc) {
-    Serial.println("Configuration update received");
-    
-    if (doc.containsKey("telemetryInterval")) {
-        // Update telemetry interval (not implemented in this base version)
-        Serial.println("Telemetry interval update requested");
-    }
-    
-    if (doc.containsKey("buzzerEnabled")) {
-        bool enabled = doc["buzzerEnabled"];
-        preferences.putBool("buzzer_enabled", enabled);
-        Serial.println("Buzzer enabled: " + String(enabled));
-    }
-}
-
-void handleOTA(DynamicJsonDocument& doc) {
-    String otaUrl = doc["url"];
-    if (otaUrl.length() > 0) {
-        Serial.println("OTA update requested: " + otaUrl);
-        // OTA update will be handled by AsyncElegantOTA web interface
-        buzzerBeep(5, 100);
-    }
-}
-
-void publishStatus() {
-    DynamicJsonDocument doc(512);
-    
-    doc["deviceId"] = DEVICE_ID;
-    doc["deviceType"] = DEVICE_TYPE;
-    doc["firmwareVersion"] = FIRMWARE_VERSION;
-    doc["timestamp"] = getTimestamp();
-    doc["status"]["online"] = true;
-    doc["status"]["uptime"] = millis() - bootTime;
-    doc["status"]["freeHeap"] = ESP.getFreeHeap();
-    doc["status"]["rssi"] = WiFi.RSSI();
-    doc["status"]["ip"] = WiFi.localIP().toString();
-    doc["status"]["mac"] = WiFi.macAddress();
-    
-    String payload;
-    serializeJson(doc, payload);
-    
-    String topic = "smarthome/" + home_id + "/" + DEVICE_ID + "/status";
-    mqttClient.publish(topic.c_str(), payload.c_str(), true); // Retained message
-    
-    Serial.println("Status published to: " + topic);
-}
-
-void publishHeartbeat() {
-    DynamicJsonDocument doc(256);
-    
-    doc["deviceId"] = DEVICE_ID;
-    doc["timestamp"] = getTimestamp();
-    doc["uptime"] = millis() - bootTime;
-    doc["rssi"] = WiFi.RSSI();
-    doc["freeHeap"] = ESP.getFreeHeap();
-    
-    String payload;
-    serializeJson(doc, payload);
-    
-    String topic = "smarthome/" + home_id + "/" + DEVICE_ID + "/heartbeat";
-    mqttClient.publish(topic.c_str(), payload.c_str());
-}
-
-void publishTelemetry() {
-    DynamicJsonDocument doc(512);
-    
-    doc["deviceId"] = DEVICE_ID;
-    doc["deviceType"] = DEVICE_TYPE;
-    doc["timestamp"] = getTimestamp();
-    
-    // Base device telemetry (system info)
-    doc["data"]["uptime"] = millis() - bootTime;
-    doc["data"]["freeHeap"] = ESP.getFreeHeap();
-    doc["data"]["rssi"] = WiFi.RSSI();
-    doc["data"]["temperature"] = temperatureRead(); // Internal temperature sensor
-    
-    doc["status"]["wifiConnected"] = wifiConnected;
-    doc["status"]["mqttConnected"] = mqttConnected;
-    doc["status"]["ip"] = WiFi.localIP().toString();
-    
-    String payload;
-    serializeJson(doc, payload);
-    
-    String topic = "smarthome/" + home_id + "/" + DEVICE_ID + "/telemetry";
-    mqttClient.publish(topic.c_str(), payload.c_str());
-    
-    Serial.println("Telemetry published");
-}
-
-void handleWiFiReset() {
-    static unsigned long buttonPressStart = 0;
-    static bool buttonPressed = false;
-    
-    bool currentState = digitalRead(WIFI_RESET_PIN) == LOW;
-    
-    if (currentState && !buttonPressed) {
-        // Button just pressed
-        buttonPressed = true;
-        buttonPressStart = millis();
-        Serial.println("WiFi reset button pressed");
-    } else if (!currentState && buttonPressed) {
-        // Button released
-        buttonPressed = false;
-        unsigned long pressDuration = millis() - buttonPressStart;
         
-        if (pressDuration > 5000) {
-            // Long press - reset WiFi
-            Serial.println("WiFi reset triggered!");
-            buzzerBeep(3, 200);
+    } else if (type == "PING") {
+        Serial.println("Ping received");
+        sendCommandAck(commandId, "SUCCESS", "Pong");
+        
+    } else if (type == "UPDATE_CONFIG") {
+        Serial.println("Config update");
+        sendCommandAck(commandId, "SUCCESS", "Config updated");
+        
+    } else if (type == "OTA_UPDATE") {
+        Serial.println("OTA Update command received");
+        
+        JsonObject payloadObj = doc["payload"];
+        String firmwareUrl = payloadObj["firmwareUrl"] | "";
+        String version = payloadObj["version"] | "";
+        int otaJobId = payloadObj["otaJobId"] | 0;
+        
+        if (firmwareUrl.length() > 0 && otaJobId > 0) {
+            sendCommandAck(commandId, "SUCCESS", "Starting OTA update");
+            performOTAUpdate(firmwareUrl, version, otaJobId);
+        } else {
+            sendCommandAck(commandId, "FAILED", "Invalid OTA parameters");
+        }
+        
+    } else if (type == "SET_CREDENTIALS") {
+        Serial.println("Set credentials command received");
+        
+        JsonObject payloadObj = doc["payload"];
+        int newDeviceId = payloadObj["deviceId"] | 0;
+        String newDeviceKey = payloadObj["deviceKey"] | "";
+        
+        if (newDeviceId > 0 && newDeviceKey.length() > 0) {
+            // Save to preferences
+            preferences.putInt("deviceId", newDeviceId);
+            preferences.putString("deviceKey", newDeviceKey);
             
-            // Clear WiFi credentials
-            WiFi.disconnect(true);
-            preferences.clear();
+            Serial.println("✓ Credentials saved!");
+            Serial.println("Device ID: " + String(newDeviceId));
+            Serial.println("Device Key: " + newDeviceKey);
             
-            delay(1000);
+            sendCommandAck(commandId, "SUCCESS", "Credentials saved, restarting...");
+            delay(2000);
             ESP.restart();
-        } else if (pressDuration > 1000) {
-            // Short press - just beep
-            buzzerBeep(1, 100);
+        } else {
+            sendCommandAck(commandId, "FAILED", "Invalid credentials");
         }
     }
 }
 
-void buzzerBeep(int count, int duration) {
-    if (!preferences.getBool("buzzer_enabled", true)) {
-        return; // Buzzer disabled
+void sendCommandAck(int commandId, const char* status, const char* message) {
+    if (!mqttClient.connected() || commandId == 0) return;
+    
+    int deviceId = preferences.getInt("deviceId", 0);
+    if (deviceId == 0) return;
+    
+    StaticJsonDocument<256> doc;
+    doc["commandId"] = commandId;
+    doc["status"] = status;
+    doc["message"] = message;
+    doc["ts"] = millis();
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    String topic = "devices/" + String(deviceId) + "/commands/ack";
+    mqttClient.publish(topic.c_str(), payload.c_str());
+    
+    Serial.println("ACK sent: " + String(status));
+}
+
+void setupOTA() {
+    // Hostname untuk OTA
+    int deviceId = preferences.getInt("deviceId", 0);
+    String hostname = (deviceId > 0) ? "ESP32-" + String(deviceId) : "ESP32-" + macAddress;
+    hostname.replace(":", "");
+    ArduinoOTA.setHostname(hostname.c_str());
+    
+    // Password OTA
+    ArduinoOTA.setPassword("admin123");
+    
+    ArduinoOTA.onStart([]() {
+        String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+        Serial.println("OTA Start: " + type);
+    });
+    
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\nOTA End");
+    });
+    
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    });
+    
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+    
+    ArduinoOTA.begin();
+    Serial.println("OTA Ready");
+}
+
+void performOTAUpdate(String firmwareUrl, String version, int otaJobId) {
+    Serial.println("\n=== Starting HTTP OTA Update ===");
+    Serial.println("URL: " + firmwareUrl);
+    Serial.println("Version: " + version);
+    Serial.println("OTA Job ID: " + String(otaJobId));
+    
+    // Send progress: DOWNLOADING
+    sendOTAProgress(otaJobId, "DOWNLOADING", 0, "");
+    
+    HTTPClient http;
+    http.begin(firmwareUrl);
+    http.setTimeout(30000); // 30 second timeout
+    
+    int httpCode = http.GET();
+    
+    if (httpCode != 200) {
+        String error = "HTTP Error: " + String(httpCode);
+        Serial.println(error);
+        sendOTAProgress(otaJobId, "FAILED", 0, error);
+        http.end();
+        return;
     }
     
-    for (int i = 0; i < count; i++) {
-        digitalWrite(BUZZER_PIN, HIGH);
-        delay(duration);
-        digitalWrite(BUZZER_PIN, LOW);
-        if (i < count - 1) {
-            delay(duration / 2);
+    int contentLength = http.getSize();
+    if (contentLength <= 0) {
+        sendOTAProgress(otaJobId, "FAILED", 0, "Invalid content length");
+        http.end();
+        return;
+    }
+    
+    Serial.printf("Firmware size: %d bytes\n", contentLength);
+    
+    bool canBegin = Update.begin(contentLength);
+    if (!canBegin) {
+        sendOTAProgress(otaJobId, "FAILED", 0, "Not enough space");
+        http.end();
+        return;
+    }
+    
+    // Get stream
+    WiFiClient* stream = http.getStreamPtr();
+    
+    size_t written = 0;
+    uint8_t buff[128];
+    int lastProgress = 0;
+    
+    while (http.connected() && (written < contentLength)) {
+        size_t available = stream->available();
+        
+        if (available) {
+            int c = stream->readBytes(buff, min(available, sizeof(buff)));
+            
+            if (c > 0) {
+                Update.write(buff, c);
+                written += c;
+                
+                // Send progress every 10%
+                int progress = (written * 100) / contentLength;
+                if (progress >= lastProgress + 10) {
+                    Serial.printf("Progress: %d%%\n", progress);
+                    sendOTAProgress(otaJobId, "DOWNLOADING", progress, "");
+                    lastProgress = progress;
+                }
+            }
         }
+        delay(1);
     }
+    
+    if (written != contentLength) {
+        sendOTAProgress(otaJobId, "FAILED", 0, "Download incomplete");
+        Update.abort();
+        http.end();
+        return;
+    }
+    
+    if (Update.end()) {
+        Serial.println("OTA Update Success!");
+        
+        if (Update.isFinished()) {
+            sendOTAProgress(otaJobId, "APPLIED", 100, "Update successful, rebooting...");
+            Serial.println("Rebooting...");
+            delay(2000);
+            ESP.restart();
+        } else {
+            sendOTAProgress(otaJobId, "FAILED", 0, "Update not finished");
+        }
+    } else {
+        String error = "Update Error: " + String(Update.getError());
+        Serial.println(error);
+        sendOTAProgress(otaJobId, "FAILED", 0, error);
+    }
+    
+    http.end();
 }
 
-void setupWebServer() {
-    // Root page
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-        String html = "<!DOCTYPE html><html><head><title>ESP32-C3 Smart Home Device</title>";
-        html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-        html += "<style>body{font-family:Arial;margin:40px;background:#f0f0f0}";
-        html += ".container{background:white;padding:20px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}";
-        html += ".status{padding:10px;margin:10px 0;border-radius:5px}";
-        html += ".online{background:#d4edda;color:#155724;border:1px solid #c3e6cb}";
-        html += ".offline{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb}";
-        html += "button{background:#007bff;color:white;border:none;padding:10px 20px;border-radius:5px;cursor:pointer;margin:5px}";
-        html += "button:hover{background:#0056b3}</style></head><body>";
-        
-        html += "<div class='container'>";
-        html += "<h1>🏠 ESP32-C3 Smart Home Device</h1>";
-        html += "<h2>Device Information</h2>";
-        html += "<p><strong>Device ID:</strong> " + DEVICE_ID + "</p>";
-        html += "<p><strong>Device Type:</strong> " + String(DEVICE_TYPE) + "</p>";
-        html += "<p><strong>Firmware Version:</strong> " + String(FIRMWARE_VERSION) + "</p>";
-        html += "<p><strong>IP Address:</strong> " + WiFi.localIP().toString() + "</p>";
-        html += "<p><strong>MAC Address:</strong> " + WiFi.macAddress() + "</p>";
-        html += "<p><strong>Uptime:</strong> " + String((millis() - bootTime) / 1000) + " seconds</p>";
-        
-        html += "<h2>Connection Status</h2>";
-        html += "<div class='status " + String(wifiConnected ? "online" : "offline") + "'>";
-        html += "WiFi: " + String(wifiConnected ? "Connected" : "Disconnected");
-        html += " (RSSI: " + String(WiFi.RSSI()) + " dBm)</div>";
-        
-        html += "<div class='status " + String(mqttConnected ? "online" : "offline") + "'>";
-        html += "MQTT: " + String(mqttConnected ? "Connected" : "Disconnected") + "</div>";
-        
-        html += "<h2>Actions</h2>";
-        html += "<button onclick='location.href=\"/restart\"'>Restart Device</button>";
-        html += "<button onclick='location.href=\"/update\"'>OTA Update</button>";
-        html += "<button onclick='buzzerTest()'>Test Buzzer</button>";
-        
-        html += "<script>";
-        html += "function buzzerTest(){fetch('/buzzer-test').then(r=>alert('Buzzer test sent!'))}";
-        html += "setTimeout(()=>location.reload(), 30000);"; // Auto refresh every 30 seconds
-        html += "</script>";
-        
-        html += "</div></body></html>";
-        
-        request->send(200, "text/html", html);
-    });
+void sendOTAProgress(int otaJobId, const char* status, int progress, String error) {
+    if (!mqttClient.connected()) return;
     
-    // Restart endpoint
-    server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *request){
-        request->send(200, "text/plain", "Restarting device...");
-        delay(1000);
-        ESP.restart();
-    });
+    int deviceId = preferences.getInt("deviceId", 0);
+    if (deviceId == 0) return;
     
-    // Buzzer test endpoint
-    server.on("/buzzer-test", HTTP_GET, [](AsyncWebServerRequest *request){
-        buzzerBeep(3, 200);
-        request->send(200, "text/plain", "Buzzer test completed");
-    });
+    StaticJsonDocument<256> doc;
+    doc["otaJobId"] = otaJobId;
+    doc["status"] = status;
+    doc["progress"] = progress;
+    doc["currentVersion"] = FIRMWARE_VERSION;
     
-    // Device info API
-    server.on("/api/info", HTTP_GET, [](AsyncWebServerRequest *request){
-        DynamicJsonDocument doc(512);
-        doc["deviceId"] = DEVICE_ID;
-        doc["deviceType"] = DEVICE_TYPE;
-        doc["firmwareVersion"] = FIRMWARE_VERSION;
-        doc["uptime"] = millis() - bootTime;
-        doc["freeHeap"] = ESP.getFreeHeap();
-        doc["wifiConnected"] = wifiConnected;
-        doc["mqttConnected"] = mqttConnected;
-        doc["rssi"] = WiFi.RSSI();
-        doc["ip"] = WiFi.localIP().toString();
-        doc["mac"] = WiFi.macAddress();
-        
-        String response;
-        serializeJson(doc, response);
-        request->send(200, "application/json", response);
-    });
-}
-
-String getTimestamp() {
-    // Simple timestamp (milliseconds since boot)
-    // In production, you might want to use NTP for real timestamps
-    return String(millis());
+    if (error.length() > 0) {
+        doc["error"] = error;
+    }
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    String topic = "devices/" + String(deviceId) + "/ota/progress";
+    mqttClient.publish(topic.c_str(), payload.c_str());
+    
+    Serial.println("OTA Progress: " + String(status) + " " + String(progress) + "%");
 }
