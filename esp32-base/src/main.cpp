@@ -12,24 +12,17 @@
 
 // ===== KONFIGURASI - GANTI SESUAI KEBUTUHAN =====
 // PENTING: Pastikan WiFi menggunakan 2.4GHz (ESP32 tidak support 5GHz)
-// Jika error AUTH_EXPIRE, cek:
-// 1. Password WiFi benar
-// 2. Router tidak pakai MAC filtering
-// 3. Signal WiFi cukup kuat
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+// Default WiFi credentials (akan di-override oleh Preferences jika sudah disimpan)
+String WIFI_SSID = "";  // Ganti dengan hotspot HP untuk test
+String WIFI_PASSWORD = "";  // Ganti dengan password hotspot
 
 const char* MQTT_SERVER = "192.168.100.11";  // IP komputer (bukan router!)
 const int MQTT_PORT = 1883;
 const char* MQTT_USER = "";  // Kosongkan jika tidak pakai auth
 const char* MQTT_PASSWORD = "";
-
-// DEVICE_ID dan DEVICE_KEY akan didapat setelah registrasi di backend
-const int DEVICE_ID = 0;  // Set ke 0 untuk mode registrasi
-const char* DEVICE_KEY = "";  // Kosongkan untuk mode registrasi
 // ================================================
 
-const char* FIRMWARE_VERSION = "1.0.4";  // Updated version
+const char* FIRMWARE_VERSION = "1.0.6";  // Enhanced WiFi connection stability
 const char* DEVICE_TYPE = "BASE";  // Type: BASE (no sensor, OTA only)
 
 // Backend URL untuk OTA
@@ -76,15 +69,23 @@ void setup() {
     // Init preferences
     preferences.begin("device", false);
     
+    // Load saved WiFi credentials from Preferences
+    if (preferences.isKey("wifiSsid") && preferences.isKey("wifiPassword")) {
+        WIFI_SSID = preferences.getString("wifiSsid", "");
+        WIFI_PASSWORD = preferences.getString("wifiPassword", "");
+        if (WIFI_SSID.length() > 0) {
+            Serial.println("✓ Loaded WiFi credentials from memory");
+            Serial.println("SSID: " + WIFI_SSID);
+        }
+    }
+    
     // Load saved device credentials
     if (preferences.isKey("deviceId")) {
         int savedId = preferences.getInt("deviceId", 0);
         String savedKey = preferences.getString("deviceKey", "");
         if (savedId > 0 && savedKey.length() > 0) {
-            Serial.println("Loaded credentials from memory");
+            Serial.println("✓ Loaded device credentials from memory");
             Serial.println("Device ID: " + String(savedId));
-            // Update constants (will be used in MQTT)
-            // Note: Can't modify const, so we'll use preferences directly
         }
     }
     
@@ -147,32 +148,51 @@ void loop() {
 
 void connectWiFi() {
     Serial.println("\n=== Connecting to WiFi ===");
-    Serial.println("SSID: " + String(WIFI_SSID));
+    Serial.println("SSID: " + WIFI_SSID);
     
     // Disconnect first to clear any previous state
     WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
     delay(1000);
     
     // Set WiFi mode
     WiFi.mode(WIFI_STA);
     
-    // Optional: Set hostname
+    // ESP32-C3 specific WiFi configurations
+    WiFi.setAutoReconnect(true);
+    WiFi.setSleep(false);  // Disable WiFi sleep for stability
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);  // Max power for better connection
+    
+    // Set hostname
     WiFi.setHostname(("ESP32-" + macAddress).c_str());
     
-    // Start connection
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    // Try to connect with specific config
+    Serial.println("Attempting connection with optimized settings...");
+    
+    // Method 1: Standard connection
+    WiFi.begin(WIFI_SSID.c_str(), WIFI_PASSWORD.c_str());
     
     Serial.print("Connecting");
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
         delay(500);
         Serial.print(".");
         
-        // Print status for debugging
+        // Print detailed status every 5 seconds
         if (attempts % 10 == 0 && attempts > 0) {
             Serial.print("\nStatus: ");
             Serial.print(WiFi.status());
-            Serial.print(" ");
+            Serial.print(" | RSSI: ");
+            Serial.print(WiFi.RSSI());
+            Serial.print(" dBm | ");
+        }
+        
+        // Try reconnect after 15 attempts
+        if (attempts == 15) {
+            Serial.println("\nRetrying with different method...");
+            WiFi.disconnect();
+            delay(1000);
+            WiFi.begin(WIFI_SSID.c_str(), WIFI_PASSWORD.c_str());
         }
         
         attempts++;
@@ -181,16 +201,30 @@ void connectWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("\n✓ WiFi Connected!");
         Serial.println("IP: " + WiFi.localIP().toString());
+        Serial.println("Gateway: " + WiFi.gatewayIP().toString());
+        Serial.println("DNS: " + WiFi.dnsIP().toString());
         Serial.println("Signal: " + String(WiFi.RSSI()) + " dBm");
+        Serial.println("Channel: " + String(WiFi.channel()));
     } else {
         Serial.println("\n✗ WiFi Connection Failed!");
-        Serial.println("Status: " + String(WiFi.status()));
-        Serial.println("Possible issues:");
-        Serial.println("- Wrong password");
-        Serial.println("- Router too far (weak signal)");
-        Serial.println("- Router MAC filtering enabled");
-        Serial.println("- 2.4GHz band disabled on router");
-        Serial.println("\nWaiting 10 seconds before retry...");
+        Serial.println("Status Code: " + String(WiFi.status()));
+        Serial.println("\nStatus meanings:");
+        Serial.println("0 = WL_IDLE_STATUS");
+        Serial.println("1 = WL_NO_SSID_AVAIL (SSID not found)");
+        Serial.println("2 = WL_SCAN_COMPLETED");
+        Serial.println("3 = WL_CONNECTED");
+        Serial.println("4 = WL_CONNECT_FAILED");
+        Serial.println("5 = WL_CONNECTION_LOST");
+        Serial.println("6 = WL_DISCONNECTED");
+        Serial.println("\nPossible solutions:");
+        Serial.println("1. Check router security: Use WPA2-PSK (not WPA3)");
+        Serial.println("2. Check password is correct");
+        Serial.println("3. Move ESP32 closer to router");
+        Serial.println("4. Check router 2.4GHz band is enabled");
+        Serial.println("5. Disable MAC filtering on router");
+        Serial.println("6. Change router channel to 1, 6, or 11");
+        Serial.println("7. Set router channel width to 20MHz");
+        Serial.println("\nWaiting 10 seconds before restart...");
         delay(10000);
         ESP.restart();
     }
@@ -337,13 +371,23 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         JsonObject payloadObj = doc["payload"];
         int newDeviceId = payloadObj["deviceId"] | 0;
         String newDeviceKey = payloadObj["deviceKey"] | "";
+        String wifiSsid = payloadObj["wifiSsid"] | "";
+        String wifiPassword = payloadObj["wifiPassword"] | "";
         
         if (newDeviceId > 0 && newDeviceKey.length() > 0) {
-            // Save to preferences
+            // Save device credentials to preferences
             preferences.putInt("deviceId", newDeviceId);
             preferences.putString("deviceKey", newDeviceKey);
             
-            Serial.println("✓ Credentials saved!");
+            // Save WiFi credentials if provided
+            if (wifiSsid.length() > 0 && wifiPassword.length() > 0) {
+                preferences.putString("wifiSsid", wifiSsid);
+                preferences.putString("wifiPassword", wifiPassword);
+                Serial.println("✓ WiFi credentials saved!");
+                Serial.println("SSID: " + wifiSsid);
+            }
+            
+            Serial.println("✓ Device credentials saved!");
             Serial.println("Device ID: " + String(newDeviceId));
             Serial.println("Device Key: " + newDeviceKey);
             
